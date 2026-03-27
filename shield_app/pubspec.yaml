@@ -1,0 +1,49 @@
+name: shield_app
+description: Offline-first women safety SOS application
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # Location
+  geolocator: ^11.0.0
+
+  # SMS
+  
+
+  # Phone call
+  url_launcher: ^6.2.5
+
+  # Permissions
+  permission_handler: ^11.3.0
+
+  # Secure storage
+  flutter_secure_storage: ^9.0.0
+
+  # Local database
+  sqflite: ^2.3.3
+  path_provider: ^2.1.3
+
+  # Sensors (shake, motion)
+  sensors_plus: ^5.0.1
+
+  
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
