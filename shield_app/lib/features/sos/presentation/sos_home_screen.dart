@@ -328,7 +328,7 @@ class _SosHomeScreenState extends ConsumerState<SosHomeScreen>
         }
 
         return DefaultTabController(
-          length: 3,
+          length: 4,
           child: Scaffold(
             backgroundColor: const Color(0xFF08090D),
             appBar: AppBar(
@@ -355,6 +355,7 @@ class _SosHomeScreenState extends ConsumerState<SosHomeScreen>
               bottom: TabBar(
                 tabs: [
                   Tab(text: disguiseActive ? 'Home' : 'Safety'),
+                  Tab(text: disguiseActive ? 'Setup' : 'Prepare'),
                   Tab(text: disguiseActive ? 'People' : 'Contacts'),
                   Tab(text: disguiseActive ? 'Logs' : 'History'),
                 ],
@@ -370,12 +371,18 @@ class _SosHomeScreenState extends ConsumerState<SosHomeScreen>
                 _SafetyTab(
                   state: state,
                   now: _now,
+                  disguiseModeEnabled: disguiseActive,
+                  onHoldToArm: () => _armFullPanic(state),
+                  onSilentHold: () => _armSilentSos(state),
+                  onPinQuickAccess: _configurePersistentShortcuts,
+                ),
+                _PrepareTab(
+                  state: state,
+                  now: _now,
                   appLockEnabled: state.settings.appLockEnabled && _hasAppLockPin,
                   stealthNotificationsEnabled:
                       state.settings.stealthNotificationsEnabled,
                   disguiseModeEnabled: disguiseActive,
-                  onHoldToArm: () => _armFullPanic(state),
-                  onSilentHold: () => _armSilentSos(state),
                   onPinQuickAccess: _configurePersistentShortcuts,
                   onToggleStealthNotifications: (value) async {
                     await ref.read(safetyDashboardProvider.notifier).updateSettings(
@@ -432,36 +439,18 @@ class _SafetyTab extends ConsumerWidget {
   const _SafetyTab({
     required this.state,
     required this.now,
-    required this.appLockEnabled,
-    required this.stealthNotificationsEnabled,
     required this.disguiseModeEnabled,
     required this.onHoldToArm,
     required this.onSilentHold,
     required this.onPinQuickAccess,
-    required this.onToggleStealthNotifications,
-    required this.onEnableAppLock,
-    required this.onDisableAppLock,
-    required this.onClearHistory,
-    required this.onDeleteAllData,
-    required this.onSecretTap,
-    required this.onSecretLongPress,
   });
 
   final SafetyDashboardState state;
   final DateTime now;
-  final bool appLockEnabled;
-  final bool stealthNotificationsEnabled;
   final bool disguiseModeEnabled;
   final VoidCallback onHoldToArm;
   final VoidCallback onSilentHold;
   final Future<void> Function() onPinQuickAccess;
-  final Future<void> Function(bool value) onToggleStealthNotifications;
-  final Future<void> Function() onEnableAppLock;
-  final Future<void> Function() onDisableAppLock;
-  final Future<void> Function() onClearHistory;
-  final Future<void> Function() onDeleteAllData;
-  final VoidCallback onSecretTap;
-  final VoidCallback onSecretLongPress;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -472,6 +461,13 @@ class _SafetyTab extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
+        _SectionIntroCard(
+          title: disguiseModeEnabled ? 'Use this page fast' : 'Use this page in the moment',
+          body: disguiseModeEnabled
+              ? 'Tap the main button for quick tools. Hold for the fastest call path. Open Setup later for practice and privacy.'
+              : 'Use the Safety Button first. Choose Full Panic for immediate danger, Alert Family for discreet help, or Get Home Safe for late travel.',
+        ),
+        const SizedBox(height: 16),
         _StatusCard(state: state, remaining: remaining),
         const SizedBox(height: 16),
         _SafetyButtonCard(
@@ -501,18 +497,11 @@ class _SafetyTab extends ConsumerWidget {
           _JourneyStatusCard(state: state),
           const SizedBox(height: 16),
         ],
-        _DeviceAccessCard(
-          state: state,
-          onPinQuickAccess: onPinQuickAccess,
-        ),
-        const SizedBox(height: 16),
-        _QuickLaunchCard(state: state),
-        const SizedBox(height: 16),
         _ActionCard(
-          title: disguiseModeEnabled ? 'Priority contact' : 'Immediate danger',
+          title: disguiseModeEnabled ? 'Priority contact' : 'Need urgent help',
           subtitle: disguiseModeEnabled
-              ? 'Keeps the fastest call path close at hand when you need to reach someone quickly.'
-              : 'Calls 112, sends alerts to trusted contacts, and logs the incident.',
+              ? 'Use this when you need the fastest call path.'
+              : 'Use this if you are in immediate danger.',
           accent: const Color(0xFFE54B4B),
           children: [
             FilledButton(
@@ -520,7 +509,11 @@ class _SafetyTab extends ConsumerWidget {
                   state.isPerformingAction ? null : controller.triggerFullPanic,
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFFE54B4B),
+                elevation: 0,
                 minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
               ),
               child: Text(
                 disguiseModeEnabled ? 'Start Priority Call' : 'Trigger Full Panic',
@@ -533,6 +526,10 @@ class _SafetyTab extends ConsumerWidget {
                   : controller.callEmergencyNumber,
               style: OutlinedButton.styleFrom(
                 minimumSize: const Size.fromHeight(48),
+                side: const BorderSide(color: Color(0x26FFFFFF)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
               ),
               child: Text('Call ${state.settings.primaryEmergencyNumber}'),
             ),
@@ -540,10 +537,10 @@ class _SafetyTab extends ConsumerWidget {
         ),
         const SizedBox(height: 16),
         _ActionCard(
-          title: disguiseModeEnabled ? 'Quiet update' : 'Silent danger',
+          title: disguiseModeEnabled ? 'Quiet update' : 'Need quiet help',
           subtitle: disguiseModeEnabled
-              ? 'Sends a discreet update with location to the people you trust.'
-              : 'Sends a discreet SOS with location to trusted contacts.',
+              ? 'Sends a discreet update to the people you trust.'
+              : 'Use this when you want help without calling first.',
           accent: const Color(0xFFFFB703),
           children: [
             FilledButton(
@@ -552,7 +549,11 @@ class _SafetyTab extends ConsumerWidget {
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFFFFB703),
                 foregroundColor: Colors.black,
+                elevation: 0,
                 minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
               ),
               child: Text(
                 disguiseModeEnabled ? 'Send Quiet Update' : 'Alert Family',
@@ -561,14 +562,12 @@ class _SafetyTab extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 16),
-        _ContactMessageCompareCard(state: state),
-        const SizedBox(height: 16),
         _ActionCard(
-          title: disguiseModeEnabled ? 'Arrival timer' : 'Get home safe',
+          title: disguiseModeEnabled ? 'Arrival timer' : 'Going home',
           subtitle:
               disguiseModeEnabled
-                  ? 'Use a simple timer for arrivals, or plan the full trip so route details stay attached if you go quiet.'
-                  : 'Use a simple timer for quick exits, or plan the full journey so destination and ride details stay attached to your missed-arrival escalation.',
+                  ? 'Start a timer for arrivals, or add trip details if you want more context attached.'
+                  : 'Use this for cabs, late travel, and trips where someone should know if you stop responding.',
           accent: const Color(0xFF4CC9F0),
           children: [
             Wrap(
@@ -598,6 +597,12 @@ class _SafetyTab extends ConsumerWidget {
                   child: OutlinedButton(
                     onPressed:
                         deadline == null ? null : controller.cancelCheckIn,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0x26FFFFFF)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
                     child: Text(
                       disguiseModeEnabled
                           ? 'Stop Arrival Timer'
@@ -611,6 +616,12 @@ class _SafetyTab extends ConsumerWidget {
                     onPressed: state.isPerformingAction
                         ? null
                         : controller.callWomenHelpline,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0x26FFFFFF)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
                     child: Text('Call ${state.settings.womenHelplineNumber}'),
                   ),
                 ),
@@ -626,7 +637,11 @@ class _SafetyTab extends ConsumerWidget {
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(0xFF4CC9F0),
                   foregroundColor: const Color(0xFF06131A),
+                  elevation: 0,
                   minimumSize: const Size.fromHeight(50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
                 ),
                 icon: const Icon(Icons.route_outlined),
                 label: Text(
@@ -642,29 +657,61 @@ class _SafetyTab extends ConsumerWidget {
             ),
           ],
         ),
-        const SizedBox(height: 16),
-        _ReadinessCard(state: state),
-        const SizedBox(height: 16),
-        _PrivacyStealthCard(
-          state: state,
-          appLockEnabled: appLockEnabled,
-          stealthNotificationsEnabled: stealthNotificationsEnabled,
-          disguiseModeEnabled: state.settings.disguiseModeEnabled,
-          onToggleStealthNotifications: onToggleStealthNotifications,
-          onEnableAppLock: onEnableAppLock,
-          onDisableAppLock: onDisableAppLock,
-          onClearHistory: onClearHistory,
-          onDeleteAllData: onDeleteAllData,
+      ],
+    );
+  }
+}
+
+class _PrepareTab extends ConsumerWidget {
+  const _PrepareTab({
+    required this.state,
+    required this.now,
+    required this.appLockEnabled,
+    required this.stealthNotificationsEnabled,
+    required this.disguiseModeEnabled,
+    required this.onPinQuickAccess,
+    required this.onToggleStealthNotifications,
+    required this.onEnableAppLock,
+    required this.onDisableAppLock,
+    required this.onClearHistory,
+    required this.onDeleteAllData,
+    required this.onSecretTap,
+    required this.onSecretLongPress,
+  });
+
+  final SafetyDashboardState state;
+  final DateTime now;
+  final bool appLockEnabled;
+  final bool stealthNotificationsEnabled;
+  final bool disguiseModeEnabled;
+  final Future<void> Function() onPinQuickAccess;
+  final Future<void> Function(bool value) onToggleStealthNotifications;
+  final Future<void> Function() onEnableAppLock;
+  final Future<void> Function() onDisableAppLock;
+  final Future<void> Function() onClearHistory;
+  final Future<void> Function() onDeleteAllData;
+  final VoidCallback onSecretTap;
+  final VoidCallback onSecretLongPress;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.read(safetyDashboardProvider.notifier);
+
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        _SectionIntroCard(
+          title: disguiseModeEnabled ? 'Set this up calmly' : 'Set this up before you need it',
+          body: disguiseModeEnabled
+              ? 'Keep quick access, practice, privacy, and workspace controls here. Nothing in this tab should feel urgent.'
+              : 'Use this tab for setup, rehearsal, shortcuts, privacy, and message previews. The Safety tab stays focused on fast decisions.',
         ),
         const SizedBox(height: 16),
         _ActionCard(
-          title: state.settings.disguiseModeEnabled
-              ? 'Workspace snapshot'
-              : 'Preparedness snapshot',
-          subtitle:
-              state.settings.disguiseModeEnabled
-                  ? 'Review local setup, quick-access layers, and workspace tools.'
-                  : 'A strong SOS setup needs trusted contacts, discreet messaging, and clear helpline paths.',
+          title: disguiseModeEnabled ? 'Workspace setup' : 'Prepare your setup',
+          subtitle: disguiseModeEnabled
+              ? 'Practice quick-access paths, keep the workspace discreet, and review what is ready before you need it.'
+              : 'Keep practice tools, privacy controls, and device shortcuts close by without crowding the live emergency screen.',
           accent: const Color(0xFF8ECAE6),
           children: [
             _InfoLine(
@@ -672,71 +719,225 @@ class _SafetyTab extends ConsumerWidget {
               value: '${state.contacts.length} ready',
             ),
             _InfoLine(
-              label: 'Disguise mode',
+              label: disguiseModeEnabled ? 'Workspace disguise' : 'Camouflage mode',
               value: state.settings.disguiseModeEnabled ? 'On' : 'Off',
             ),
             _InfoLine(
               label: 'Follow-up contact reminder',
               value: state.settings.autoCallPrimaryContact ? 'Enabled' : 'Off',
             ),
-            const SizedBox(height: 12),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                state.settings.disguiseModeEnabled
-                    ? 'Keep workspace disguise available'
-                    : 'Enable camouflage feature',
-              ),
-              subtitle: Text(
-                state.settings.disguiseModeEnabled
-                    ? 'Keeps the disguised workspace available without replacing the main dashboard.'
-                    : 'Keeps the disguise screen available without replacing the main dashboard.',
-              ),
-              value: state.settings.disguiseModeEnabled,
-              onChanged: (value) {
-                controller.updateSettings(
-                  state.settings.copyWith(disguiseModeEnabled: value),
-                );
-              },
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: state.settings.disguiseModeEnabled
-                  ? () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => _DisguiseWorkspace(
-                            state: state,
-                            now: now,
-                            onSecretTap: onSecretTap,
-                            onSecretLongPress: onSecretLongPress,
-                          ),
-                        ),
-                      );
-                    }
-                  : null,
-              child: Text(
-                state.settings.disguiseModeEnabled
-                    ? 'Open Workspace Screen'
-                    : 'Open Camouflage Screen',
-              ),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Highlight a follow-up contact after 112'),
-              subtitle: const Text(
-                'Reminds you which trusted person to call once the emergency call is over.',
-              ),
-              value: state.settings.autoCallPrimaryContact,
-              onChanged: (value) {
-                controller.updateSettings(
-                  state.settings.copyWith(autoCallPrimaryContact: value),
-                );
-              },
-            ),
           ],
         ),
+        const SizedBox(height: 16),
+        _ReadinessCard(state: state),
+        const SizedBox(height: 16),
+        _SectionToggleCard(
+          title: disguiseModeEnabled ? 'Quick access setup' : 'Device shortcuts',
+          subtitle: disguiseModeEnabled
+              ? 'Keep the workspace reachable from the phone surface when you need it quickly.'
+              : 'Set up the notification, widget, tile, and app-icon shortcuts without crowding the emergency tab.',
+          initiallyExpanded: true,
+          child: _DeviceAccessCard(
+            state: state,
+            onPinQuickAccess: onPinQuickAccess,
+          ),
+        ),
+        const SizedBox(height: 16),
+        _SectionToggleCard(
+          title: disguiseModeEnabled ? 'Practice workspace' : 'Practice and rehearsal',
+          subtitle: disguiseModeEnabled
+              ? 'Rehearse fast actions and review the message examples before you ever need them.'
+              : 'Practice the quick actions and review what contacts will see without crowding the main emergency flow.',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _QuickLaunchCard(state: state),
+              const SizedBox(height: 16),
+              _ContactMessageCompareCard(state: state),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _SectionToggleCard(
+          title: disguiseModeEnabled
+              ? 'Workspace behavior'
+              : 'Camouflage and follow-up',
+          subtitle: disguiseModeEnabled
+              ? 'Control how this workspace appears and which follow-up reminder stays visible after a fast call.'
+              : 'Keep the disguise screen ready and highlight the trusted person to contact after 112.',
+          child: _ActionCard(
+            title: disguiseModeEnabled
+                ? 'Workspace behavior'
+                : 'Camouflage and follow-up',
+            subtitle: disguiseModeEnabled
+                ? 'Control how this workspace appears and which follow-up reminder stays visible after a fast call.'
+                : 'Keep the disguise screen ready and highlight the trusted person to contact after 112.',
+            accent: const Color(0xFF80ED99),
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  state.settings.disguiseModeEnabled
+                      ? 'Keep workspace disguise available'
+                      : 'Enable camouflage feature',
+                ),
+                subtitle: Text(
+                  state.settings.disguiseModeEnabled
+                      ? 'Keeps the disguised workspace available without replacing the main dashboard.'
+                      : 'Keeps the disguise screen available without replacing the main dashboard.',
+                ),
+                value: state.settings.disguiseModeEnabled,
+                onChanged: (value) {
+                  controller.updateSettings(
+                    state.settings.copyWith(disguiseModeEnabled: value),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: state.settings.disguiseModeEnabled
+                    ? () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => _DisguiseWorkspace(
+                              state: state,
+                              now: now,
+                              onSecretTap: onSecretTap,
+                              onSecretLongPress: onSecretLongPress,
+                            ),
+                          ),
+                        );
+                      }
+                    : null,
+                child: Text(
+                  state.settings.disguiseModeEnabled
+                      ? 'Open Workspace Screen'
+                      : 'Open Camouflage Screen',
+                ),
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Highlight a follow-up contact after 112'),
+                subtitle: const Text(
+                  'Reminds you which trusted person to call once the emergency call is over.',
+                ),
+                value: state.settings.autoCallPrimaryContact,
+                onChanged: (value) {
+                  controller.updateSettings(
+                    state.settings.copyWith(autoCallPrimaryContact: value),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _SectionToggleCard(
+          title: disguiseModeEnabled ? 'Workspace privacy' : 'Privacy and stealth',
+          subtitle: disguiseModeEnabled
+              ? 'Protect local access, soften notification wording, and clear sensitive data when needed.'
+              : 'Control app lock, stealth wording, and data cleanup without keeping those controls on the emergency screen.',
+          child: _PrivacyStealthCard(
+            state: state,
+            appLockEnabled: appLockEnabled,
+            stealthNotificationsEnabled: stealthNotificationsEnabled,
+            disguiseModeEnabled: state.settings.disguiseModeEnabled,
+            onToggleStealthNotifications: onToggleStealthNotifications,
+            onEnableAppLock: onEnableAppLock,
+            onDisableAppLock: onDisableAppLock,
+            onClearHistory: onClearHistory,
+            onDeleteAllData: onDeleteAllData,
+          ),
+        ),
       ],
+    );
+  }
+}
+
+class _SectionToggleCard extends StatefulWidget {
+  const _SectionToggleCard({
+    required this.title,
+    required this.subtitle,
+    required this.child,
+    this.initiallyExpanded = false,
+  });
+
+  final String title;
+  final String subtitle;
+  final Widget child;
+  final bool initiallyExpanded;
+
+  @override
+  State<_SectionToggleCard> createState() => _SectionToggleCardState();
+}
+
+class _SectionToggleCardState extends State<_SectionToggleCard> {
+  late bool _expanded;
+
+  @override
+  void initState() {
+    super.initState();
+    _expanded = widget.initiallyExpanded;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF11131A),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0x14FFFFFF)),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(24),
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          widget.subtitle,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    color: Colors.white70,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+              child: widget.child,
+            ),
+        ],
+      ),
     );
   }
 }
@@ -938,6 +1139,49 @@ class _DisguiseNoteCard extends StatelessWidget {
   }
 }
 
+class _SectionIntroCard extends StatelessWidget {
+  const _SectionIntroCard({
+    required this.title,
+    required this.body,
+  });
+
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF101722),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0x14FFFFFF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            body,
+            style: const TextStyle(
+              color: Colors.white70,
+              height: 1.45,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _QuickLaunchCard extends StatelessWidget {
   const _QuickLaunchCard({required this.state});
 
@@ -1022,9 +1266,16 @@ class _QuickActionChip extends StatelessWidget {
       avatar: Icon(icon, size: 18),
       label: Text(label),
       onPressed: onTap,
-      backgroundColor: const Color(0xFF182028),
-      labelStyle: const TextStyle(color: Colors.white),
-      side: const BorderSide(color: Colors.white12),
+      backgroundColor: const Color(0xFF151C25),
+      labelStyle: const TextStyle(
+        color: Colors.white,
+        fontWeight: FontWeight.w600,
+      ),
+      side: const BorderSide(color: Color(0x14FFFFFF)),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(999),
+      ),
     );
   }
 }
@@ -1991,7 +2242,7 @@ class _JourneyStatusCard extends ConsumerWidget {
     return _ActionCard(
       title: 'Active journey',
       subtitle:
-          'These details will stay attached to Get Home Safe so missed-arrival escalation gives your trusted circle more context.',
+          'These trip details stay attached so your contacts have more context if you stop responding.',
       accent: const Color(0xFF4CC9F0),
       children: [
         if (journey.destination.trim().isNotEmpty)
@@ -2034,14 +2285,14 @@ class _JourneyStatusCard extends ConsumerWidget {
                   ? null
                   : () => _showRunningLateSheet(context, ref),
               icon: const Icon(Icons.schedule_outlined),
-              label: const Text('Running Late'),
+              label: const Text('Add Time'),
             ),
             OutlinedButton.icon(
               onPressed: state.isPerformingAction
                   ? null
                   : () => _showJourneyPlannerSheet(context, state),
               icon: const Icon(Icons.edit_road_outlined),
-              label: const Text('Change Route'),
+              label: const Text('Edit Trip'),
             ),
             OutlinedButton.icon(
               onPressed: state.isPerformingAction
@@ -2065,7 +2316,7 @@ class _JourneyStatusCard extends ConsumerWidget {
                         type: _JourneyUpdateType.route,
                       ),
               icon: const Icon(Icons.alt_route_outlined),
-              label: const Text('Route Changed'),
+              label: const Text('Route Update'),
             ),
             FilledButton.icon(
               onPressed: state.isPerformingAction
@@ -2219,12 +2470,17 @@ class _ContactsTabState extends ConsumerState<_ContactsTab> {
         _ActionCard(
           title: 'Trusted contacts',
           subtitle:
-              'Choose people who will answer quickly, coordinate with each other, and escalate if you go silent.',
+              'Add a few people who will answer quickly and take your alerts seriously.',
           accent: const Color(0xFF7AE582),
           children: [
+            const Text(
+              'Best setup: one close family member, one nearby friend, and one backup from hostel, PG, campus, or work.',
+              style: TextStyle(color: Colors.white70, height: 1.4),
+            ),
+            const SizedBox(height: 14),
             TextField(
               controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Name'),
+              decoration: const InputDecoration(labelText: 'Contact name'),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -2236,17 +2492,17 @@ class _ContactsTabState extends ConsumerState<_ContactsTab> {
             TextField(
               controller: _relationshipController,
               decoration: const InputDecoration(
-                labelText: 'Relationship',
+                labelText: 'How you know them',
                 hintText: 'Sister, friend, hostel warden, colleague',
               ),
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<int>(
               value: _priority,
-              decoration: const InputDecoration(labelText: 'Priority'),
+              decoration: const InputDecoration(labelText: 'Response order'),
               items: const [
-                DropdownMenuItem(value: 1, child: Text('1 - First responder')),
-                DropdownMenuItem(value: 2, child: Text('2 - Secondary backup')),
+                DropdownMenuItem(value: 1, child: Text('1 - Contact first')),
+                DropdownMenuItem(value: 2, child: Text('2 - Backup contact')),
                 DropdownMenuItem(value: 3, child: Text('3 - Wider support')),
               ],
               onChanged: (value) {
@@ -2259,7 +2515,7 @@ class _ContactsTabState extends ConsumerState<_ContactsTab> {
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Call this person during full panic'),
+              title: const Text('Call this person during Full Panic'),
               value: _prefersCall,
               onChanged: (value) {
                 setState(() {
@@ -2351,7 +2607,7 @@ class _ContactTile extends ConsumerWidget {
                   const Padding(
                     padding: EdgeInsets.only(top: 4),
                     child: Text(
-                      'Preferred for full-panic follow-up calls',
+                      'Call this person first after a Full Panic alert',
                       style: TextStyle(color: Color(0xFF7AE582)),
                     ),
                   ),
@@ -2385,7 +2641,7 @@ class _HistoryTab extends StatelessWidget {
         _ActionCard(
           title: 'Incident timeline',
           subtitle:
-              'A lightweight local record helps after stalking, harassment, or repeated unsafe travel incidents.',
+              'This keeps a simple local record of alerts, calls, and journey events on this device.',
           accent: const Color(0xFFCDB4DB),
           children: [
             _InfoLine(
@@ -2401,9 +2657,9 @@ class _HistoryTab extends StatelessWidget {
         const SizedBox(height: 16),
         if (state.incidents.isEmpty)
           const _EmptyState(
-            title: 'No incidents logged yet',
+            title: 'No activity yet',
             body:
-                'Once you trigger Alert Family, Full Panic, a helpline call, or a missed Get Home Safe escalation, it will appear here.',
+                'Alerts, calls, and journey updates will appear here after you use the app.',
           )
         else
           ...state.incidents.map(
@@ -2478,18 +2734,25 @@ class _ActionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFF11131A),
+        color: const Color(0xFF10141B),
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white10),
+        border: Border.all(color: const Color(0x14FFFFFF)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x12000000),
+            blurRadius: 18,
+            offset: Offset(0, 10),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 46,
-            height: 6,
+            width: 42,
+            height: 5,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(99),
               color: accent,
@@ -2500,16 +2763,17 @@ class _ActionCard extends StatelessWidget {
             title,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 20,
+              fontSize: 22,
               fontWeight: FontWeight.w700,
+              height: 1.15,
             ),
           ),
           const SizedBox(height: 6),
           Text(
             subtitle,
-            style: const TextStyle(color: Colors.white70, height: 1.4),
+            style: const TextStyle(color: Colors.white70, height: 1.5),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
           ...children,
         ],
       ),
