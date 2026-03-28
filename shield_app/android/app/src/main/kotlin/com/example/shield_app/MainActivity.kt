@@ -1,11 +1,13 @@
 package com.example.shield_app
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -29,10 +31,11 @@ class MainActivity : FlutterActivity() {
     private val notificationPermissionRequestCode = 1003
 
     private val notificationChannelId = "shield.quick_access"
+    private val checkInChannelId = "shield.check_in_expiry"
+    private val preferencesName = "shield_prefs"
+    private val stealthModeKey = "stealth_mode"
     private val notificationId = 1120
-    private val shortcutScheme = "shield"
-    private val shortcutHost = "shortcut"
-
+    private val checkInAlarmRequestCode = 1121
     private var pendingCallNumber: String? = null
     private var pendingCallResult: MethodChannel.Result? = null
     private var pendingSmsNumber: String? = null
@@ -45,7 +48,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        latestShortcutAction = extractShortcutAction(intent) ?: latestShortcutAction
+        latestShortcutAction = ShortcutIntents.extractShortcutAction(intent) ?: latestShortcutAction
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -89,8 +92,31 @@ class MainActivity : FlutterActivity() {
             channel.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "enablePersistentShortcuts" -> enablePersistentShortcuts(result)
+                    "scheduleCheckInAlarm" -> {
+                        val deadlineEpochMillis =
+                            call.argument<Number>("deadlineEpochMillis")?.toLong()
+                        if (deadlineEpochMillis == null) {
+                            result.error(
+                                "INVALID_DEADLINE",
+                                "deadlineEpochMillis is required",
+                                null
+                            )
+                        } else {
+                            scheduleCheckInAlarm(deadlineEpochMillis)
+                            result.success(null)
+                        }
+                    }
+                    "cancelCheckInAlarm" -> {
+                        cancelCheckInAlarm()
+                        result.success(null)
+                    }
                     "disablePersistentShortcuts" -> {
                         disablePersistentShortcuts()
+                        result.success(null)
+                    }
+                    "setStealthMode" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        setStealthMode(enabled)
                         result.success(null)
                     }
 
@@ -109,7 +135,7 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        extractShortcutAction(intent)?.let { action ->
+        ShortcutIntents.extractShortcutAction(intent)?.let { action ->
             latestShortcutAction = action
             dispatchShortcutAction(action)
         }
@@ -202,37 +228,118 @@ class MainActivity : FlutterActivity() {
         NotificationManagerCompat.from(this).cancel(notificationId)
     }
 
+    private fun setStealthMode(enabled: Boolean) {
+        getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(stealthModeKey, enabled)
+            .apply()
+        showPersistentShortcutNotification()
+    }
+
+    private fun isStealthModeEnabled(): Boolean {
+        return getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+            .getBoolean(stealthModeKey, false)
+    }
+
+    private fun scheduleCheckInAlarm(deadlineEpochMillis: Long) {
+        val alarmManager = getSystemService(AlarmManager::class.java)
+        val pendingIntent = createCheckInAlarmPendingIntent()
+        alarmManager.cancel(pendingIntent)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            !alarmManager.canScheduleExactAlarms()
+        ) {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                deadlineEpochMillis,
+                pendingIntent
+            )
+            return
+        }
+
+        when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.M -> {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    deadlineEpochMillis,
+                    pendingIntent
+                )
+            }
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT -> {
+                alarmManager.setExact(
+                    AlarmManager.RTC_WAKEUP,
+                    deadlineEpochMillis,
+                    pendingIntent
+                )
+            }
+            else -> {
+                alarmManager.set(
+                    AlarmManager.RTC_WAKEUP,
+                    deadlineEpochMillis,
+                    pendingIntent
+                )
+            }
+        }
+    }
+
+    private fun cancelCheckInAlarm() {
+        val alarmManager = getSystemService(AlarmManager::class.java)
+        alarmManager.cancel(createCheckInAlarmPendingIntent())
+        NotificationManagerCompat.from(this).cancel(checkInAlarmRequestCode)
+    }
+
+    private fun createCheckInAlarmPendingIntent(): PendingIntent {
+        val intent = Intent(this, CheckInAlarmReceiver::class.java)
+        return PendingIntent.getBroadcast(
+            this,
+            checkInAlarmRequestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     private fun showPersistentShortcutNotification() {
         createNotificationChannelIfNeeded()
+        val stealth = isStealthModeEnabled()
 
         val notification = NotificationCompat.Builder(this, notificationChannelId)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("SHIELD Quick Access")
-            .setContentText("Tap to open. Use actions for panic, silent SOS, or a 15 min safety check.")
+            .setContentTitle(if (stealth) "Daily Notes" else "SHIELD Travel Safety")
+            .setContentText(
+                if (stealth) {
+                    "Tap to open your quick tools."
+                } else {
+                    "Tap to open. Use Full Panic, Alert Family, or Get Home Safe before late travel."
+                }
+            )
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(
-                    "Tap to open SHIELD fast. Use Full Panic for 112 + alerts, Silent SOS for discreet escalation, or 15 min Check-in before late travel."
+                    if (stealth) {
+                        "Tap to open your quick tools. Open, Reach Home, and Check In stay ready from the notification shade."
+                    } else {
+                        "Tap to open SHIELD fast. Use Full Panic for 112 plus trusted-circle alerts, Alert Family for discreet escalation, or Get Home Safe before late travel."
+                    }
                 )
             )
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setOngoing(true)
             .setAutoCancel(false)
-            .setContentIntent(createActivityPendingIntent(null))
+            .setContentIntent(ShortcutIntents.createActivityPendingIntent(this, null))
             .addAction(
                 0,
-                "Full Panic",
-                createActivityPendingIntent("full_panic")
+                if (stealth) "Call" else "Full Panic",
+                ShortcutIntents.createActivityPendingIntent(this, ShortcutIntents.fullPanic)
             )
             .addAction(
                 0,
-                "Silent SOS",
-                createActivityPendingIntent("silent_sos")
+                if (stealth) "Alert" else "Alert Family",
+                ShortcutIntents.createActivityPendingIntent(this, ShortcutIntents.silentSos)
             )
             .addAction(
                 0,
-                "15 min Check-in",
-                createActivityPendingIntent("check_in")
+                if (stealth) "Reach Home" else "Get Home Safe",
+                ShortcutIntents.createActivityPendingIntent(this, ShortcutIntents.checkIn)
             )
             .build()
 
@@ -247,45 +354,26 @@ class MainActivity : FlutterActivity() {
         val manager = getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(
             notificationChannelId,
-            "SHIELD Quick Access",
+            if (isStealthModeEnabled()) "Daily Notes" else "SHIELD Travel Safety",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Fast emergency actions for SHIELD"
+            description = if (isStealthModeEnabled()) {
+                "Quick tools for daily notes"
+            } else {
+                "Fast late-travel and emergency actions for SHIELD"
+            }
             lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
         }
         manager.createNotificationChannel(channel)
-    }
-
-    private fun createActivityPendingIntent(action: String?): PendingIntent {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_NEW_TASK
-            if (action != null) {
-                data = Uri.parse("$shortcutScheme://$shortcutHost/$action")
-            }
+        val checkInChannel = NotificationChannel(
+            checkInChannelId,
+            "SHIELD Get Home Safe",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Alerts for expired Get Home Safe timers"
+            lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
         }
-
-        return PendingIntent.getActivity(
-            this,
-            action?.hashCode() ?: 0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-    }
-
-    private fun extractShortcutAction(intent: Intent?): String? {
-        val data = intent?.data ?: return null
-        if (data.scheme != shortcutScheme || data.host != shortcutHost) {
-            return null
-        }
-
-        return when (data.lastPathSegment) {
-            "full_panic" -> "full_panic"
-            "silent_sos" -> "silent_sos"
-            "check_in" -> "check_in"
-            else -> null
-        }
+        manager.createNotificationChannel(checkInChannel)
     }
 
     private fun dispatchShortcutAction(action: String) {

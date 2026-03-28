@@ -5,9 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/permissions/location_permission.dart';
 import '../../../services/call_service.dart';
 import '../../../services/location_service.dart';
+import '../../../services/shortcut_service.dart';
 import '../../../services/sms_service.dart';
 import '../data/safety_repository.dart';
 import '../domain/incident_log.dart';
+import '../domain/journey_plan.dart';
 import '../domain/safety_settings.dart';
 import '../domain/trusted_contact.dart';
 import 'safety_dashboard_state.dart';
@@ -39,19 +41,26 @@ class SafetyDashboardController
       final contacts = await _repository.getContacts();
       final incidents = await _repository.getIncidents();
       final settings = await _repository.getSettings();
+      final checkInDeadline = await _repository.getActiveCheckInDeadline();
+      final activeJourney = await _repository.getActiveJourney();
       state = AsyncValue.data(
         SafetyDashboardState(
           contacts: contacts,
           incidents: incidents,
           settings: settings,
-          activeMode: SafetyMode.idle,
+          activeMode:
+              checkInDeadline == null ? SafetyMode.idle : SafetyMode.checkIn,
           isPerformingAction: false,
           statusMessage: contacts.isEmpty
-              ? 'Add trusted contacts before relying on silent escalation.'
-              : 'Safety center ready.',
-          checkInDeadline: null,
+              ? 'Add trusted contacts before relying on discreet alerts.'
+              : checkInDeadline == null
+                  ? 'Safety center ready.'
+                  : 'Get Home Safe is active.',
+          checkInDeadline: checkInDeadline,
+          activeJourney: activeJourney,
         ),
       );
+      await syncCheckInState();
     } catch (error, stackTrace) {
       state = AsyncValue.error(error, stackTrace);
     }
@@ -124,12 +133,33 @@ class SafetyDashboardController
     );
   }
 
+  Future<void> clearIncidentHistory() async {
+    await _repository.clearIncidentHistory();
+    _setState(
+      _current.copyWith(
+        incidents: const [],
+        statusMessage: 'Incident history cleared from this device.',
+      ),
+    );
+  }
+
+  Future<void> deleteAllSafetyData() async {
+    _checkInTimer?.cancel();
+    await ShortcutService.cancelCheckInAlarm();
+    await _repository.deleteAllSafetyData();
+    _setState(
+      SafetyDashboardState.initial().copyWith(
+        statusMessage: 'All local safety data was deleted from this device.',
+      ),
+    );
+  }
+
   Future<void> triggerSilentSos() async {
     if (!SmsService.supportsSilentSend) {
       _setState(
         _current.copyWith(
           statusMessage:
-              'Silent SOS needs Android SMS access on this build. Use the call actions instead.',
+              'Alert Family needs Android SMS access on this build. Use the call actions instead.',
         ),
       );
       return;
@@ -137,7 +167,7 @@ class SafetyDashboardController
 
     await _triggerEmergency(
       mode: SafetyMode.silent,
-      summary: 'Silent SOS sent to trusted contacts.',
+      summary: 'Alert Family sent to your trusted circle.',
       messagePrefix: 'SILENT SOS',
       shouldCallEmergency: false,
     );
@@ -194,12 +224,16 @@ class SafetyDashboardController
     );
   }
 
-  void startCheckIn([int? minutes]) {
+  void startCheckIn([int? minutes, JourneyPlan? journey]) {
+    unawaited(_startCheckIn(minutes, journey));
+  }
+
+  Future<void> _startCheckIn([int? minutes, JourneyPlan? journey]) async {
     if (_current.contacts.isEmpty) {
       _setState(
         _current.copyWith(
           statusMessage:
-              'Add a trusted contact before using the missed check-in flow.',
+              'Add a trusted contact before using Get Home Safe.',
         ),
       );
       return;
@@ -207,35 +241,288 @@ class SafetyDashboardController
 
     final durationMinutes = minutes ?? _current.settings.checkInMinutes;
     final deadline = DateTime.now().add(Duration(minutes: durationMinutes));
-    _checkInTimer?.cancel();
-    _checkInTimer = Timer(Duration(minutes: durationMinutes), () {
-      unawaited(
-        _triggerEmergency(
-          mode: SafetyMode.checkIn,
-          summary: 'Check-in expired and escalated to silent SOS.',
-          messagePrefix: 'MISSED CHECK-IN ALERT',
-          shouldCallEmergency: false,
-        ),
-      );
-    });
+    final resolvedJourney = journey?.copyWith(expectedArrival: deadline);
+    await _repository.saveActiveCheckInDeadline(deadline);
+    await _repository.saveActiveJourney(resolvedJourney);
+    _scheduleCheckInTimer(deadline);
+    await ShortcutService.scheduleCheckInAlarm(deadline);
 
     _setState(
       _current.copyWith(
         activeMode: SafetyMode.checkIn,
         checkInDeadline: deadline,
-        statusMessage: 'Check-in armed for $durationMinutes minutes.',
+        activeJourney: resolvedJourney,
+        statusMessage: _buildCheckInStatus(
+          deadline: deadline,
+          durationMinutes: durationMinutes,
+          journey: resolvedJourney,
+        ),
       ),
     );
   }
 
   void cancelCheckIn() {
+    unawaited(_cancelCheckIn());
+  }
+
+  Future<void> markArrivedSafely() async {
+    final journey = _current.activeJourney;
+    final destination = journey?.destination.trim();
+    await _recordIncident(
+      mode: 'Reached Safely',
+      summary: destination == null || destination.isEmpty
+          ? 'Reached safely and closed Get Home Safe.'
+          : 'Reached safely at $destination and closed Get Home Safe.',
+      locationText: journey?.vehicleDetails.trim().isEmpty ?? true
+          ? null
+          : 'Ride details: ${journey!.vehicleDetails.trim()}',
+    );
+    await _cancelCheckIn(statusMessage: 'Marked safe. Get Home Safe closed.');
+  }
+
+  Future<void> extendCheckIn(int extraMinutes) async {
+    final currentDeadline = _current.checkInDeadline;
+    if (currentDeadline == null) {
+      return;
+    }
+
+    final journey = _current.activeJourney;
+    final newDeadline = currentDeadline.add(Duration(minutes: extraMinutes));
+    final updatedJourney = journey?.copyWith(expectedArrival: newDeadline);
+
+    await _repository.saveActiveCheckInDeadline(newDeadline);
+    await _repository.saveActiveJourney(updatedJourney);
+    _scheduleCheckInTimer(newDeadline);
+    await ShortcutService.scheduleCheckInAlarm(newDeadline);
+
+    _setState(
+      _current.copyWith(
+        activeMode: SafetyMode.checkIn,
+        checkInDeadline: newDeadline,
+        activeJourney: updatedJourney,
+        statusMessage: 'Running late. Get Home Safe extended by $extraMinutes minutes.',
+      ),
+    );
+  }
+
+  Future<void> updateJourneyProgress({
+    required String mode,
+    String? destination,
+    String? vehicleDetails,
+    String? routeNote,
+    required String summary,
+  }) async {
+    final currentDeadline = _current.checkInDeadline;
+    final currentJourney = _current.activeJourney;
+    if (currentDeadline == null || currentJourney == null) {
+      return;
+    }
+
+    final updatedJourney = currentJourney.copyWith(
+      destination: destination ?? currentJourney.destination,
+      vehicleDetails: vehicleDetails ?? currentJourney.vehicleDetails,
+      routeNote: routeNote ?? currentJourney.routeNote,
+      expectedArrival: currentDeadline,
+    );
+
+    await _repository.saveActiveJourney(updatedJourney);
+    await _recordIncident(
+      mode: mode,
+      summary: summary,
+      locationText: _buildJourneyLogContext(updatedJourney),
+    );
+
+    _setState(
+      _current.copyWith(
+        activeJourney: updatedJourney,
+        statusMessage: summary,
+      ),
+    );
+  }
+
+  Future<void> notifyTrustedCircleOfJourneyUpdate({
+    required String updateLabel,
+    String? note,
+  }) async {
+    if (!SmsService.supportsSilentSend) {
+      _setState(
+        _current.copyWith(
+          statusMessage:
+              'Trusted-circle updates need Android SMS access on this build.',
+        ),
+      );
+      return;
+    }
+
+    final contacts = _current.contacts;
+    if (contacts.isEmpty) {
+      _setState(
+        _current.copyWith(
+          statusMessage:
+              'Add a trusted contact before sending journey updates.',
+        ),
+      );
+      return;
+    }
+
+    _setState(
+      _current.copyWith(
+        activeMode: SafetyMode.checkIn,
+        isPerformingAction: true,
+        statusMessage: 'Sending journey update to your trusted circle...',
+      ),
+    );
+
+    try {
+      final message = await _buildJourneyUpdateMessage(
+        updateLabel: updateLabel,
+        note: note,
+      );
+      final deliveryFailures = <String>[];
+      var deliveredContactCount = 0;
+
+      for (final contact in contacts) {
+        try {
+          await SmsService.sendSOS(number: contact.phone, message: message);
+          deliveredContactCount++;
+        } catch (_) {
+          deliveryFailures.add(contact.name);
+        }
+      }
+
+      if (deliveredContactCount == 0) {
+        throw Exception('No trusted-circle updates could be delivered.');
+      }
+
+      final summary = note == null || note.trim().isEmpty
+          ? '$updateLabel sent to your trusted circle.'
+          : '$updateLabel sent to your trusted circle. ${note.trim()}';
+      await _recordIncident(
+        mode: 'Trusted Circle Update',
+        summary: summary,
+        locationText: _buildJourneyLogContext(_current.activeJourney),
+      );
+
+      final deliverySummary = _buildDeliverySummary(
+        deliveredContactCount: deliveredContactCount,
+        emergencyCallPlaced: false,
+        emergencyCallFailed: false,
+        deliveryFailures: deliveryFailures,
+      );
+      _setState(
+        _current.copyWith(
+          activeMode: SafetyMode.checkIn,
+          isPerformingAction: false,
+          statusMessage: [summary, deliverySummary]
+              .whereType<String>()
+              .where((value) => value.trim().isNotEmpty)
+              .join(' '),
+        ),
+      );
+    } catch (_) {
+      _setState(
+        _current.copyWith(
+          activeMode: SafetyMode.checkIn,
+          isPerformingAction: false,
+          statusMessage:
+              'Journey update could not be sent. Check SMS permission and try again.',
+        ),
+      );
+    }
+  }
+
+  Future<void> _cancelCheckIn({
+    String statusMessage = 'Get Home Safe cancelled.',
+  }) async {
     _checkInTimer?.cancel();
+    await _repository.saveActiveCheckInDeadline(null);
+    await _repository.saveActiveJourney(null);
+    await ShortcutService.cancelCheckInAlarm();
     _setState(
       _current.copyWith(
         activeMode: SafetyMode.idle,
         clearCheckIn: true,
-        statusMessage: 'Check-in cancelled.',
+        clearActiveJourney: true,
+        statusMessage: statusMessage,
       ),
+    );
+  }
+
+  Future<void> syncCheckInState() async {
+    final deadline = await _repository.getActiveCheckInDeadline();
+    final activeJourney = await _repository.getActiveJourney();
+    if (deadline == null) {
+      _checkInTimer?.cancel();
+      if (_current.checkInDeadline != null ||
+          _current.activeMode == SafetyMode.checkIn) {
+        _setState(
+          _current.copyWith(
+            activeMode: SafetyMode.idle,
+            clearCheckIn: true,
+            clearActiveJourney: true,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!deadline.isAfter(DateTime.now())) {
+      await handleExpiredCheckIn();
+      return;
+    }
+
+    _scheduleCheckInTimer(deadline);
+    await ShortcutService.scheduleCheckInAlarm(deadline);
+    if (_current.checkInDeadline != deadline ||
+        _current.activeMode != SafetyMode.checkIn) {
+      _setState(
+        _current.copyWith(
+          activeMode: SafetyMode.checkIn,
+          checkInDeadline: deadline,
+          activeJourney: activeJourney,
+          statusMessage: _buildActiveCheckInStatus(
+            deadline: deadline,
+            journey: activeJourney,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> handleExpiredCheckIn() async {
+    final deadline = await _repository.getActiveCheckInDeadline();
+    if (deadline == null) {
+      return;
+    }
+
+    if (deadline.isAfter(DateTime.now())) {
+      _scheduleCheckInTimer(deadline);
+      return;
+    }
+
+    _checkInTimer?.cancel();
+    await _repository.saveActiveCheckInDeadline(null);
+    await _repository.saveActiveJourney(null);
+    await ShortcutService.cancelCheckInAlarm();
+
+    if (_current.contacts.isEmpty) {
+      _setState(
+        _current.copyWith(
+          activeMode: SafetyMode.idle,
+          clearCheckIn: true,
+          clearActiveJourney: true,
+          statusMessage:
+              'Get Home Safe expired, but no trusted contact is configured for escalation.',
+        ),
+      );
+      return;
+    }
+
+    await _triggerEmergency(
+      mode: SafetyMode.checkIn,
+      summary: 'Get Home Safe expired and escalated to Alert Family.',
+      messagePrefix: 'MISSED CHECK-IN ALERT',
+      shouldCallEmergency: false,
     );
   }
 
@@ -249,6 +536,12 @@ class SafetyDashboardController
       activeMode: mode,
       statusMessage: 'Preparing safety response...',
       action: () async {
+        if (mode == SafetyMode.checkIn) {
+          await _repository.saveActiveCheckInDeadline(null);
+          await _repository.saveActiveJourney(null);
+          await ShortcutService.cancelCheckInAlarm();
+          _checkInTimer?.cancel();
+        }
         final locationText = await _resolveLocationText();
         final contacts = _current.contacts;
         if (contacts.isEmpty && !shouldCallEmergency) {
@@ -259,6 +552,7 @@ class SafetyDashboardController
           prefix: messagePrefix,
           locationText: locationText,
           timestamp: timestamp,
+          journey: _current.activeJourney,
         );
         final deliveryFailures = <String>[];
         var deliveredContactCount = 0;
@@ -288,7 +582,12 @@ class SafetyDashboardController
         }
 
         await _recordIncident(
-          mode: mode.name,
+          mode: switch (mode) {
+            SafetyMode.silent => 'Alert Family',
+            SafetyMode.checkIn => 'Get Home Safe',
+            SafetyMode.fullPanic => 'Full Panic',
+            SafetyMode.idle => 'Safety Event',
+          },
           summary: summary,
           locationText: locationText,
         );
@@ -312,6 +611,7 @@ class SafetyDashboardController
           _current.copyWith(
             activeMode: SafetyMode.idle,
             clearCheckIn: true,
+            clearActiveJourney: true,
             statusMessage: [summary, deliverySummary, prompt]
                 .whereType<String>()
                 .where((value) => value.trim().isNotEmpty)
@@ -320,6 +620,19 @@ class SafetyDashboardController
         );
       },
     );
+  }
+
+  void _scheduleCheckInTimer(DateTime deadline) {
+    _checkInTimer?.cancel();
+    final duration = deadline.difference(DateTime.now());
+    if (duration.isNegative || duration == Duration.zero) {
+      unawaited(handleExpiredCheckIn());
+      return;
+    }
+
+    _checkInTimer = Timer(duration, () {
+      unawaited(handleExpiredCheckIn());
+    });
   }
 
   Future<String> _resolveLocationText() async {
@@ -340,6 +653,7 @@ class SafetyDashboardController
     required String prefix,
     required String locationText,
     required DateTime timestamp,
+    JourneyPlan? journey,
   }) {
     final localTimestamp =
         '${timestamp.day.toString().padLeft(2, '0')}/'
@@ -347,11 +661,141 @@ class SafetyDashboardController
         '${timestamp.year} '
         '${timestamp.hour.toString().padLeft(2, '0')}:'
         '${timestamp.minute.toString().padLeft(2, '0')}';
+    final journeySection = _buildJourneyMessageBlock(journey);
     return '$prefix\n'
         'I may be unsafe and need help.\n'
         'Time: $localTimestamp\n'
+        '$journeySection'
         '$locationText\n'
-        'Please call me, track my route, and escalate to 112 if I do not respond.';
+        'What to do now:\n'
+        '1. Call me immediately.\n'
+        '2. Keep tracking my route and expected arrival.\n'
+        '3. If I do not respond, escalate to 112 and contact the rest of my trusted circle.';
+  }
+
+  Future<String> _buildJourneyUpdateMessage({
+    required String updateLabel,
+    String? note,
+  }) async {
+    final timestamp = DateTime.now();
+    final localTimestamp =
+        '${timestamp.day.toString().padLeft(2, '0')}/'
+        '${timestamp.month.toString().padLeft(2, '0')}/'
+        '${timestamp.year} '
+        '${timestamp.hour.toString().padLeft(2, '0')}:'
+        '${timestamp.minute.toString().padLeft(2, '0')}';
+    final locationText = await _resolveLocationText();
+    final noteBlock = note == null || note.trim().isEmpty
+        ? ''
+        : 'Note: ${note.trim()}\n';
+    final guidance = _buildJourneyUpdateGuidance(updateLabel);
+    return 'TRUSTED CIRCLE UPDATE\n'
+        '$updateLabel\n'
+        'Time: $localTimestamp\n'
+        '${_buildJourneyMessageBlock(_current.activeJourney)}'
+        '$noteBlock'
+        '$locationText\n'
+        '$guidance';
+  }
+
+  String _buildJourneyUpdateGuidance(String updateLabel) {
+    switch (updateLabel.trim().toLowerCase()) {
+      case 'running late':
+        return 'What to do now:\n'
+            '1. Acknowledge this update so I know you saw it.\n'
+            '2. Keep watch on my route and updated arrival time.\n'
+            '3. Call me if the delay keeps growing or I stop responding.';
+      case 'route changed':
+        return 'What to do now:\n'
+            '1. Note the changed route and keep tracking my journey.\n'
+            '2. Call me if the new route looks unexpected.\n'
+            '3. Escalate if I stop responding or the route becomes unsafe.';
+      case 'vehicle changed':
+        return 'What to do now:\n'
+            '1. Save the new vehicle details and keep watch.\n'
+            '2. Call me if anything about the new ride feels off.\n'
+            '3. Escalate if I stop responding or the trip changes again unexpectedly.';
+      case 'check on me':
+        return 'What to do now:\n'
+            '1. Call me immediately.\n'
+            '2. Keep tracking my route and current location.\n'
+            '3. If I do not respond, escalate quickly and contact the rest of my trusted circle.';
+      default:
+        return 'What to do now:\n'
+            '1. Acknowledge this update and call me if needed.\n'
+            '2. Keep watch on my route and expected arrival.\n'
+            '3. Escalate if I stop responding or the situation changes.';
+    }
+  }
+
+  String _buildJourneyMessageBlock(JourneyPlan? journey) {
+    if (journey == null || !journey.hasDetails) {
+      return '';
+    }
+
+    final lines = <String>[];
+    if (journey.destination.trim().isNotEmpty) {
+      lines.add('Destination: ${journey.destination.trim()}');
+    }
+    if (journey.vehicleDetails.trim().isNotEmpty) {
+      lines.add('Vehicle: ${journey.vehicleDetails.trim()}');
+    }
+    if (journey.routeNote.trim().isNotEmpty) {
+      lines.add('Route note: ${journey.routeNote.trim()}');
+    }
+    final eta =
+        '${journey.expectedArrival.hour.toString().padLeft(2, '0')}:${journey.expectedArrival.minute.toString().padLeft(2, '0')}';
+    lines.add('Expected arrival: $eta');
+    return '${lines.join('\n')}\n';
+  }
+
+  String? _buildJourneyLogContext(JourneyPlan? journey) {
+    if (journey == null || !journey.hasDetails) {
+      return null;
+    }
+
+    final parts = <String>[];
+    if (journey.destination.trim().isNotEmpty) {
+      parts.add('Destination: ${journey.destination.trim()}');
+    }
+    if (journey.vehicleDetails.trim().isNotEmpty) {
+      parts.add('Ride details: ${journey.vehicleDetails.trim()}');
+    }
+    if (journey.routeNote.trim().isNotEmpty) {
+      parts.add('Route note: ${journey.routeNote.trim()}');
+    }
+    return parts.isEmpty ? null : parts.join('\n');
+  }
+
+  String _buildCheckInStatus({
+    required DateTime deadline,
+    required int durationMinutes,
+    JourneyPlan? journey,
+  }) {
+    if (journey == null || !journey.hasDetails) {
+      return 'Get Home Safe armed for $durationMinutes minutes.';
+    }
+
+    final destination = journey.destination.trim().isEmpty
+        ? 'your destination'
+        : journey.destination.trim();
+    return 'Get Home Safe armed for $durationMinutes minutes toward $destination.';
+  }
+
+  String _buildActiveCheckInStatus({
+    required DateTime deadline,
+    JourneyPlan? journey,
+  }) {
+    final time =
+        '${deadline.hour.toString().padLeft(2, '0')}:${deadline.minute.toString().padLeft(2, '0')}';
+    if (journey == null || !journey.hasDetails) {
+      return 'Get Home Safe is active until $time.';
+    }
+
+    final destination = journey.destination.trim().isEmpty
+        ? 'your destination'
+        : journey.destination.trim();
+    return 'Get Home Safe is active for $destination until $time.';
   }
 
   String? _buildDeliverySummary({

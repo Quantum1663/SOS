@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shield_widget_description">India-first SHIELD late-travel and emergency actions for your home screen</string>
+    <string name="shortcut_quick_actions_long">Open SHIELD safety hub</string>
+    <string name="shortcut_quick_actions_short">Safety Hub</string>
+    <string name="shortcut_full_panic_long">Trigger SHIELD Full Panic</string>
+    <string name="shortcut_full_panic_short">Full Panic</string>
+    <string name="shortcut_alert_family_long">Alert your trusted circle quietly with SHIELD</string>
+    <string name="shortcut_alert_family_short">Alert Family</string>
+    <string name="shortcut_get_home_safe_long">Start a 15 minute get-home-safe check-in with SHIELD</string>
+    <string name="shortcut_get_home_safe_short">Get Home Safe</string>
+</resources>

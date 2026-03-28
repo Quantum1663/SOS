@@ -1,4 +1,5 @@
 import '../domain/incident_log.dart';
+import '../domain/journey_plan.dart';
 import '../domain/safety_settings.dart';
 import '../domain/trusted_contact.dart';
 
@@ -18,6 +19,7 @@ class SafetyDashboardState {
     required this.isPerformingAction,
     required this.statusMessage,
     required this.checkInDeadline,
+    required this.activeJourney,
   });
 
   final List<TrustedContact> contacts;
@@ -27,6 +29,7 @@ class SafetyDashboardState {
   final bool isPerformingAction;
   final String? statusMessage;
   final DateTime? checkInDeadline;
+  final JourneyPlan? activeJourney;
 
   factory SafetyDashboardState.initial() {
     return SafetyDashboardState(
@@ -37,6 +40,7 @@ class SafetyDashboardState {
       isPerformingAction: false,
       statusMessage: null,
       checkInDeadline: null,
+      activeJourney: null,
     );
   }
 
@@ -50,6 +54,8 @@ class SafetyDashboardState {
     bool clearStatusMessage = false,
     DateTime? checkInDeadline,
     bool clearCheckIn = false,
+    JourneyPlan? activeJourney,
+    bool clearActiveJourney = false,
   }) {
     return SafetyDashboardState(
       contacts: contacts ?? this.contacts,
@@ -61,6 +67,8 @@ class SafetyDashboardState {
           clearStatusMessage ? null : statusMessage ?? this.statusMessage,
       checkInDeadline:
           clearCheckIn ? null : checkInDeadline ?? this.checkInDeadline,
+      activeJourney:
+          clearActiveJourney ? null : activeJourney ?? this.activeJourney,
     );
   }
 }

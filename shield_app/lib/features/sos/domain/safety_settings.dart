@@ -6,6 +6,8 @@ class SafetySettings {
     required this.autoCallPrimaryContact,
     required this.sendWomenHelplinePrompt,
     required this.checkInMinutes,
+    required this.appLockEnabled,
+    required this.stealthNotificationsEnabled,
   });
 
   final String primaryEmergencyNumber;
@@ -14,6 +16,8 @@ class SafetySettings {
   final bool autoCallPrimaryContact;
   final bool sendWomenHelplinePrompt;
   final int checkInMinutes;
+  final bool appLockEnabled;
+  final bool stealthNotificationsEnabled;
 
   factory SafetySettings.defaults() {
     return const SafetySettings(
@@ -23,6 +27,8 @@ class SafetySettings {
       autoCallPrimaryContact: true,
       sendWomenHelplinePrompt: true,
       checkInMinutes: 30,
+      appLockEnabled: false,
+      stealthNotificationsEnabled: false,
     );
   }
 
@@ -33,6 +39,8 @@ class SafetySettings {
     bool? autoCallPrimaryContact,
     bool? sendWomenHelplinePrompt,
     int? checkInMinutes,
+    bool? appLockEnabled,
+    bool? stealthNotificationsEnabled,
   }) {
     return SafetySettings(
       primaryEmergencyNumber:
@@ -44,6 +52,9 @@ class SafetySettings {
       sendWomenHelplinePrompt:
           sendWomenHelplinePrompt ?? this.sendWomenHelplinePrompt,
       checkInMinutes: checkInMinutes ?? this.checkInMinutes,
+      appLockEnabled: appLockEnabled ?? this.appLockEnabled,
+      stealthNotificationsEnabled:
+          stealthNotificationsEnabled ?? this.stealthNotificationsEnabled,
     );
   }
 
@@ -55,6 +66,8 @@ class SafetySettings {
       'autoCallPrimaryContact': autoCallPrimaryContact.toString(),
       'sendWomenHelplinePrompt': sendWomenHelplinePrompt.toString(),
       'checkInMinutes': checkInMinutes.toString(),
+      'appLockEnabled': appLockEnabled.toString(),
+      'stealthNotificationsEnabled': stealthNotificationsEnabled.toString(),
     };
   }
 
@@ -78,6 +91,12 @@ class SafetySettings {
               : values['sendWomenHelplinePrompt'] == 'true',
       checkInMinutes:
           int.tryParse(values['checkInMinutes'] ?? '') ?? defaults.checkInMinutes,
+      appLockEnabled: values['appLockEnabled'] == null
+          ? defaults.appLockEnabled
+          : values['appLockEnabled'] == 'true',
+      stealthNotificationsEnabled: values['stealthNotificationsEnabled'] == null
+          ? defaults.stealthNotificationsEnabled
+          : values['stealthNotificationsEnabled'] == 'true',
     );
   }
 }

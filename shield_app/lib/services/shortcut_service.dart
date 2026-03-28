@@ -4,9 +4,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 enum ShortcutAction {
+  quickOpen('quick_open'),
   fullPanic('full_panic'),
   silentSos('silent_sos'),
-  checkIn('check_in');
+  checkIn('check_in'),
+  checkInExpired('check_in_expired');
 
   const ShortcutAction(this.value);
 
@@ -66,6 +68,38 @@ class ShortcutService {
     }
 
     await _channel.invokeMethod('disablePersistentShortcuts');
+  }
+
+  static Future<void> setStealthMode(bool enabled) async {
+    if (!supportsPersistentShortcuts) {
+      return;
+    }
+
+    await _channel.invokeMethod(
+      'setStealthMode',
+      <String, Object>{'enabled': enabled},
+    );
+  }
+
+  static Future<void> scheduleCheckInAlarm(DateTime deadline) async {
+    if (!supportsPersistentShortcuts) {
+      return;
+    }
+
+    await _channel.invokeMethod(
+      'scheduleCheckInAlarm',
+      <String, Object>{
+        'deadlineEpochMillis': deadline.millisecondsSinceEpoch,
+      },
+    );
+  }
+
+  static Future<void> cancelCheckInAlarm() async {
+    if (!supportsPersistentShortcuts) {
+      return;
+    }
+
+    await _channel.invokeMethod('cancelCheckInAlarm');
   }
 
   static Future<ShortcutAction?> getInitialAction() async {

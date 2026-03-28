@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="quick_actions"
+        android:shortcutLongLabel="@string/shortcut_quick_actions_long"
+        android:shortcutShortLabel="@string/shortcut_quick_actions_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.example.shield_app.MainActivity"
+            android:targetPackage="com.example.shield_app"
+            android:data="shield://shortcut/quick_open" />
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="full_panic"
+        android:shortcutLongLabel="@string/shortcut_full_panic_long"
+        android:shortcutShortLabel="@string/shortcut_full_panic_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.example.shield_app.MainActivity"
+            android:targetPackage="com.example.shield_app"
+            android:data="shield://shortcut/full_panic" />
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="silent_sos"
+        android:shortcutLongLabel="@string/shortcut_alert_family_long"
+        android:shortcutShortLabel="@string/shortcut_alert_family_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.example.shield_app.MainActivity"
+            android:targetPackage="com.example.shield_app"
+            android:data="shield://shortcut/silent_sos" />
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="check_in"
+        android:shortcutLongLabel="@string/shortcut_get_home_safe_long"
+        android:shortcutShortLabel="@string/shortcut_get_home_safe_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.example.shield_app.MainActivity"
+            android:targetPackage="com.example.shield_app"
+            android:data="shield://shortcut/check_in" />
+    </shortcut>
+</shortcuts>
