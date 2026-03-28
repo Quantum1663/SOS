@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../application/safety_dashboard_controller.dart';
 import '../application/safety_dashboard_state.dart';
 import '../domain/trusted_contact.dart';
+import '../../../services/shortcut_service.dart';
 
 class SosHomeScreen extends ConsumerStatefulWidget {
   const SosHomeScreen({super.key});
@@ -19,6 +20,7 @@ class _SosHomeScreenState extends ConsumerState<SosHomeScreen> {
   DateTime _now = DateTime.now();
   int _disguiseTapCount = 0;
   Timer? _disguiseTapTimer;
+  StreamSubscription<ShortcutAction>? _shortcutSubscription;
 
   @override
   void initState() {
@@ -30,13 +32,50 @@ class _SosHomeScreenState extends ConsumerState<SosHomeScreen> {
         });
       }
     });
+    _shortcutSubscription = ShortcutService.actions.listen(_handleShortcutAction);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _configurePersistentShortcuts();
+      final initialAction = await ShortcutService.getInitialAction();
+      if (initialAction != null && mounted) {
+        await _handleShortcutAction(initialAction);
+      }
+    });
   }
 
   @override
   void dispose() {
     _clockTimer?.cancel();
     _disguiseTapTimer?.cancel();
+    _shortcutSubscription?.cancel();
     super.dispose();
+  }
+
+  Future<void> _configurePersistentShortcuts() async {
+    if (!ShortcutService.supportsPersistentShortcuts) {
+      return;
+    }
+
+    try {
+      await ShortcutService.enablePersistentShortcuts();
+    } catch (_) {
+      // Leave the in-app shortcut system available even if the device-level
+      // quick actions cannot be pinned right now.
+    }
+  }
+
+  Future<void> _handleShortcutAction(ShortcutAction action) async {
+    final controller = ref.read(safetyDashboardProvider.notifier);
+    switch (action) {
+      case ShortcutAction.fullPanic:
+        await controller.triggerFullPanic();
+        break;
+      case ShortcutAction.silentSos:
+        await controller.triggerSilentSos();
+        break;
+      case ShortcutAction.checkIn:
+        controller.startCheckIn(15);
+        break;
+    }
   }
 
   void _registerDisguiseTap(SafetyDashboardState state) {
@@ -53,8 +92,42 @@ class _SosHomeScreenState extends ConsumerState<SosHomeScreen> {
     if (_disguiseTapCount >= 3) {
       _disguiseTapCount = 0;
       _disguiseTapTimer?.cancel();
-      _showEmergencySheet(context, ref, state);
+      _showShortcutCountdownSheet(
+        context,
+        title: 'Hidden SOS armed',
+        subtitle: 'Release pressure on the screen and stay calm. SHIELD will escalate in 5 seconds unless you cancel.',
+        accent: const Color(0xFFFFB703),
+        onConfirmed: () async {
+          await ref.read(safetyDashboardProvider.notifier).triggerSilentSos();
+        },
+      );
     }
+  }
+
+  void _armFullPanic(SafetyDashboardState state) {
+    _showShortcutCountdownSheet(
+      context,
+      title: 'Full panic armed',
+      subtitle:
+          'SHIELD will call 112 and alert your trusted circle in 5 seconds unless you cancel.',
+      accent: const Color(0xFFE54B4B),
+      onConfirmed: () async {
+        await ref.read(safetyDashboardProvider.notifier).triggerFullPanic();
+      },
+    );
+  }
+
+  void _armSilentSos(SafetyDashboardState state) {
+    _showShortcutCountdownSheet(
+      context,
+      title: 'Silent SOS armed',
+      subtitle:
+          'A discreet alert will go out in 5 seconds unless you cancel now.',
+      accent: const Color(0xFFFFB703),
+      onConfirmed: () async {
+        await ref.read(safetyDashboardProvider.notifier).triggerSilentSos();
+      },
+    );
   }
 
   @override
@@ -86,19 +159,22 @@ class _SosHomeScreenState extends ConsumerState<SosHomeScreen> {
             backgroundColor: const Color(0xFF08090D),
             appBar: AppBar(
               backgroundColor: const Color(0xFF11131A),
-              title: const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('SHIELD'),
-                  Text(
-                    'India-first SOS safety center',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.white70,
-                      fontWeight: FontWeight.w400,
+              title: GestureDetector(
+                onTap: () => _registerDisguiseTap(state),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('SHIELD'),
+                    Text(
+                      'India-first SOS safety center',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w400,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               bottom: const TabBar(
                 tabs: [
@@ -108,10 +184,21 @@ class _SosHomeScreenState extends ConsumerState<SosHomeScreen> {
                 ],
               ),
             ),
-            floatingActionButton: _QuickActionsFab(state: state),
+            floatingActionButton: _QuickActionsFab(
+              state: state,
+              onHoldToArm: () => _armFullPanic(state),
+            ),
             body: TabBarView(
               children: [
-                _SafetyTab(state: state, now: _now),
+                _SafetyTab(
+                  state: state,
+                  now: _now,
+                  onHoldToArm: () => _armFullPanic(state),
+                  onSilentHold: () => _armSilentSos(state),
+                  onPinQuickAccess: _configurePersistentShortcuts,
+                  onSecretTap: () => _registerDisguiseTap(state),
+                  onSecretLongPress: () => _armSilentSos(state),
+                ),
                 _ContactsTab(state: state),
                 _HistoryTab(state: state),
               ],
@@ -124,18 +211,25 @@ class _SosHomeScreenState extends ConsumerState<SosHomeScreen> {
 }
 
 class _QuickActionsFab extends ConsumerWidget {
-  const _QuickActionsFab({required this.state});
+  const _QuickActionsFab({
+    required this.state,
+    required this.onHoldToArm,
+  });
 
   final SafetyDashboardState state;
+  final VoidCallback onHoldToArm;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return FloatingActionButton.extended(
-      onPressed: () => _showEmergencySheet(context, ref, state),
-      backgroundColor: const Color(0xFFE54B4B),
-      foregroundColor: Colors.white,
-      icon: const Icon(Icons.bolt),
-      label: const Text('Quick SOS'),
+    return GestureDetector(
+      onLongPress: state.isPerformingAction ? null : onHoldToArm,
+      child: FloatingActionButton.extended(
+        onPressed: () => _showEmergencySheet(context, ref, state),
+        backgroundColor: const Color(0xFFE54B4B),
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.bolt),
+        label: const Text('Quick SOS'),
+      ),
     );
   }
 }
@@ -144,10 +238,20 @@ class _SafetyTab extends ConsumerWidget {
   const _SafetyTab({
     required this.state,
     required this.now,
+    required this.onHoldToArm,
+    required this.onSilentHold,
+    required this.onPinQuickAccess,
+    required this.onSecretTap,
+    required this.onSecretLongPress,
   });
 
   final SafetyDashboardState state;
   final DateTime now;
+  final VoidCallback onHoldToArm;
+  final VoidCallback onSilentHold;
+  final Future<void> Function() onPinQuickAccess;
+  final VoidCallback onSecretTap;
+  final VoidCallback onSecretLongPress;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -159,6 +263,13 @@ class _SafetyTab extends ConsumerWidget {
       padding: const EdgeInsets.all(20),
       children: [
         _StatusCard(state: state, remaining: remaining),
+        const SizedBox(height: 16),
+        _ShortcutTriggerCard(
+          state: state,
+          onHoldToArm: onHoldToArm,
+          onSilentHold: onSilentHold,
+          onPinQuickAccess: onPinQuickAccess,
+        ),
         const SizedBox(height: 16),
         _QuickLaunchCard(state: state),
         const SizedBox(height: 16),
@@ -258,6 +369,8 @@ class _SafetyTab extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 16),
+        _ReadinessCard(state: state),
+        const SizedBox(height: 16),
         _ActionCard(
           title: 'Preparedness snapshot',
           subtitle:
@@ -299,9 +412,8 @@ class _SafetyTab extends ConsumerWidget {
                           builder: (_) => _DisguiseWorkspace(
                             state: state,
                             now: now,
-                            onSecretTap: () {},
-                            onSecretLongPress: () =>
-                                _showEmergencySheet(context, ref, state),
+                            onSecretTap: onSecretTap,
+                            onSecretLongPress: onSecretLongPress,
                           ),
                         ),
                       );
@@ -617,6 +729,292 @@ class _QuickActionChip extends StatelessWidget {
   }
 }
 
+class _ShortcutTriggerCard extends StatelessWidget {
+  const _ShortcutTriggerCard({
+    required this.state,
+    required this.onHoldToArm,
+    required this.onSilentHold,
+    required this.onPinQuickAccess,
+  });
+
+  final SafetyDashboardState state;
+  final VoidCallback onHoldToArm;
+  final VoidCallback onSilentHold;
+  final Future<void> Function() onPinQuickAccess;
+
+  @override
+  Widget build(BuildContext context) {
+    final silentAvailable = state.contacts.isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF3B0D11), Color(0xFF12141C)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        border: Border.all(color: const Color(0x33E54B4B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Shortcut mode',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Built for the moment when there is no time to unlock, think, and choose. Hold to arm, cancel only if safe.',
+            style: TextStyle(color: Colors.white70, height: 1.4),
+          ),
+          const SizedBox(height: 18),
+          if (ShortcutService.supportsPersistentShortcuts) ...[
+            OutlinedButton.icon(
+              onPressed: onPinQuickAccess,
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
+              icon: const Icon(Icons.notifications_active_outlined),
+              label: const Text('Pin Notification Shortcuts'),
+            ),
+            const SizedBox(height: 12),
+          ],
+          _HoldActionSurface(
+            title: 'Hold for Full Panic',
+            subtitle:
+                'Starts a 5-second countdown, then calls 112 and alerts your trusted circle.',
+            accent: const Color(0xFFE54B4B),
+            icon: Icons.warning_amber_rounded,
+            helperLabel: 'Tap for quick actions. Hold to arm immediately.',
+            onTap: () => _showShortcutCheatSheet(context),
+            onLongPress: state.isPerformingAction ? null : onHoldToArm,
+          ),
+          const SizedBox(height: 12),
+          _HoldActionSurface(
+            title: 'Hold for Silent SOS',
+            subtitle: silentAvailable
+                ? 'Sends a discreet alert with time and location to your trusted contacts.'
+                : 'Add at least one trusted contact before using the hidden silent shortcut.',
+            accent: const Color(0xFFFFB703),
+            icon: Icons.sms_outlined,
+            helperLabel: 'Triple-tap the SHIELD title or disguise screen for the same silent trigger.',
+            onTap: () => _showShortcutCheatSheet(context),
+            onLongPress:
+                silentAvailable && !state.isPerformingAction ? onSilentHold : null,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HoldActionSurface extends StatelessWidget {
+  const _HoldActionSurface({
+    required this.title,
+    required this.subtitle,
+    required this.accent,
+    required this.icon,
+    required this.helperLabel,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  final String title;
+  final String subtitle;
+  final Color accent;
+  final IconData icon;
+  final String helperLabel;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xCC131720),
+      borderRadius: BorderRadius.circular(22),
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        borderRadius: BorderRadius.circular(22),
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: accent.withOpacity(0.18),
+                    child: Icon(icon, color: accent),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                subtitle,
+                style: const TextStyle(color: Colors.white70, height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                helperLabel,
+                style: TextStyle(
+                  color: onLongPress == null ? Colors.white38 : accent,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReadinessCard extends StatelessWidget {
+  const _ReadinessCard({required this.state});
+
+  final SafetyDashboardState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final report = _buildReadinessReport(state);
+    final color = switch (report.level) {
+      _ReadinessLevel.ready => const Color(0xFF7AE582),
+      _ReadinessLevel.partial => const Color(0xFFFFB703),
+      _ReadinessLevel.notReady => const Color(0xFFE54B4B),
+    };
+    final label = switch (report.level) {
+      _ReadinessLevel.ready => 'Ready to respond',
+      _ReadinessLevel.partial => 'Partially ready',
+      _ReadinessLevel.notReady => 'Needs setup now',
+    };
+
+    return _ActionCard(
+      title: 'Readiness layer',
+      subtitle:
+          'A trustworthy SOS app should show whether your emergency stack is actually usable right now.',
+      accent: color,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF181B22),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: color.withOpacity(0.35)),
+          ),
+          child: Row(
+            children: [
+              CircleAvatar(
+                backgroundColor: color.withOpacity(0.18),
+                child: Icon(Icons.shield_outlined, color: color),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      report.summary,
+                      style: const TextStyle(color: Colors.white70, height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        for (final item in report.items) ...[
+          _ReadinessItemTile(item: item),
+          const SizedBox(height: 10),
+        ],
+        const Text(
+          'India-focused setup: keep one family member, one nearby responder, and one hostel, PG, campus, or workplace backup in your circle.',
+          style: TextStyle(color: Colors.white70, height: 1.4),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReadinessItemTile extends StatelessWidget {
+  const _ReadinessItemTile({required this.item});
+
+  final _ReadinessItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = item.ready ? const Color(0xFF7AE582) : const Color(0xFFFFB703);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF181B22),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(
+              item.ready ? Icons.check_circle : Icons.radio_button_unchecked,
+              color: color,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  item.detail,
+                  style: const TextStyle(color: Colors.white70, height: 1.35),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _StatusCard extends StatelessWidget {
   const _StatusCard({
     required this.state,
@@ -629,6 +1027,7 @@ class _StatusCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final readiness = _buildReadinessReport(state);
     final activeLabel = switch (state.activeMode) {
       SafetyMode.idle => 'Ready',
       SafetyMode.silent => 'Silent escalation in progress',
@@ -656,6 +1055,22 @@ class _StatusCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF181B22),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: Text(
+              readiness.banner,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           Text(
             state.statusMessage ??
                 'Add trusted contacts and rehearse your flow before you need it.',
@@ -1251,4 +1666,351 @@ class _BottomSheetAction extends StatelessWidget {
       ),
     );
   }
+}
+
+void _showShortcutCheatSheet(BuildContext context) {
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: const Color(0xFF11131A),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    ),
+    builder: (context) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: const [
+              Text(
+                'Fastest SHIELD shortcuts',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              SizedBox(height: 10),
+              _ShortcutBullet(
+                title: 'Hold for Full Panic',
+                body: 'Long-press the red shortcut surface or the floating Quick SOS button to arm a 5-second emergency countdown.',
+              ),
+              _ShortcutBullet(
+                title: 'Triple-tap the SHIELD title',
+                body: 'Use this hidden shortcut for a quieter path when disguise mode is on or you cannot navigate the full screen.',
+              ),
+              _ShortcutBullet(
+                title: 'Open camouflage screen',
+                body: 'Use the notes screen as a cover, then long-press or triple-tap to trigger help without exposing the dashboard.',
+              ),
+              _ShortcutBullet(
+                title: 'Cancel only if safe',
+                body: 'Each armed shortcut gives you 5 seconds to stop a false alarm before SHIELD escalates.',
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+void _showShortcutCountdownSheet(
+  BuildContext context, {
+  required String title,
+  required String subtitle,
+  required Color accent,
+  required Future<void> Function() onConfirmed,
+}) {
+  showModalBottomSheet<void>(
+    context: context,
+    isDismissible: false,
+    enableDrag: false,
+    backgroundColor: const Color(0xFF11131A),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    ),
+    builder: (context) {
+      return _ShortcutCountdownSheet(
+        title: title,
+        subtitle: subtitle,
+        accent: accent,
+        onConfirmed: onConfirmed,
+      );
+    },
+  );
+}
+
+class _ShortcutCountdownSheet extends StatefulWidget {
+  const _ShortcutCountdownSheet({
+    required this.title,
+    required this.subtitle,
+    required this.accent,
+    required this.onConfirmed,
+  });
+
+  final String title;
+  final String subtitle;
+  final Color accent;
+  final Future<void> Function() onConfirmed;
+
+  @override
+  State<_ShortcutCountdownSheet> createState() => _ShortcutCountdownSheetState();
+}
+
+class _ShortcutCountdownSheetState extends State<_ShortcutCountdownSheet> {
+  Timer? _timer;
+  int _secondsRemaining = 5;
+  bool _confirming = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (_secondsRemaining <= 1) {
+        timer.cancel();
+        _confirm();
+        return;
+      }
+
+      setState(() {
+        _secondsRemaining--;
+      });
+    });
+  }
+
+  Future<void> _confirm() async {
+    if (_confirming) {
+      return;
+    }
+
+    _confirming = true;
+    Navigator.of(context).pop();
+    await widget.onConfirmed();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.title,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              widget.subtitle,
+              style: const TextStyle(color: Colors.white70, height: 1.4),
+            ),
+            const SizedBox(height: 20),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: const Color(0xFF181B22),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: widget.accent.withOpacity(0.35)),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    '$_secondsRemaining',
+                    style: TextStyle(
+                      color: widget.accent,
+                      fontSize: 54,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Seconds to cancel',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52),
+                ),
+                child: const Text('Cancel alarm'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ShortcutBullet extends StatelessWidget {
+  const _ShortcutBullet({
+    required this.title,
+    required this.body,
+  });
+
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 5),
+            child: Icon(Icons.circle, size: 8, color: Colors.white54),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: const TextStyle(color: Colors.white70, height: 1.4),
+                children: [
+                  TextSpan(
+                    text: '$title: ',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  TextSpan(text: body),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+_ReadinessReport _buildReadinessReport(SafetyDashboardState state) {
+  final hasTrustedCircle = state.contacts.length >= 2;
+  final hasPrimaryCaller = state.contacts.any((contact) => contact.prefersCall);
+  final hasHiddenShortcut = state.settings.disguiseModeEnabled;
+  final hasFastCheckIn = state.settings.checkInMinutes <= 30;
+  final hasIndiaEmergencyPath =
+      state.settings.primaryEmergencyNumber.trim().isNotEmpty &&
+      state.settings.womenHelplineNumber.trim().isNotEmpty;
+
+  final items = [
+    _ReadinessItem(
+      title: 'Trusted circle',
+      detail: hasTrustedCircle
+          ? '${state.contacts.length} contacts are ready to coordinate.'
+          : 'Add at least 2 contacts so one person can respond while another escalates.',
+      ready: hasTrustedCircle,
+    ),
+    _ReadinessItem(
+      title: 'Call-back responder',
+      detail: hasPrimaryCaller
+          ? 'One contact is marked as your first follow-up call.'
+          : 'Mark one contact as your first call-back person after 112.',
+      ready: hasPrimaryCaller,
+    ),
+    _ReadinessItem(
+      title: 'Hidden trigger',
+      detail: hasHiddenShortcut
+          ? 'Camouflage mode is on, so the triple-tap shortcut stays available.'
+          : 'Enable camouflage mode to keep a low-visibility shortcut ready.',
+      ready: hasHiddenShortcut,
+    ),
+    _ReadinessItem(
+      title: 'Fast check-in',
+      detail: hasFastCheckIn
+          ? 'Missed check-ins escalate within ${state.settings.checkInMinutes} minutes.'
+          : 'Reduce the check-in timer to 30 minutes or less for late travel and ride safety.',
+      ready: hasFastCheckIn,
+    ),
+    _ReadinessItem(
+      title: 'India support path',
+      detail: hasIndiaEmergencyPath
+          ? '112 and the women helpline are configured for immediate calling.'
+          : 'Set both emergency numbers so SHIELD can launch the right call fast.',
+      ready: hasIndiaEmergencyPath,
+    ),
+  ];
+
+  final readyCount = items.where((item) => item.ready).length;
+  final level = readyCount >= 4
+      ? _ReadinessLevel.ready
+      : readyCount >= 2
+          ? _ReadinessLevel.partial
+          : _ReadinessLevel.notReady;
+  final summary = switch (level) {
+    _ReadinessLevel.ready =>
+      'Your quick triggers, contacts, and fallback layers are mostly in place.',
+    _ReadinessLevel.partial =>
+      'The core flow exists, but one or two missing layers could slow help in a crisis.',
+    _ReadinessLevel.notReady =>
+      'Right now SHIELD still needs setup before it can be trusted under pressure.',
+  };
+  final banner = '$readyCount/5 safety layers configured';
+
+  return _ReadinessReport(
+    level: level,
+    items: items,
+    summary: summary,
+    banner: banner,
+  );
+}
+
+class _ReadinessReport {
+  const _ReadinessReport({
+    required this.level,
+    required this.items,
+    required this.summary,
+    required this.banner,
+  });
+
+  final _ReadinessLevel level;
+  final List<_ReadinessItem> items;
+  final String summary;
+  final String banner;
+}
+
+class _ReadinessItem {
+  const _ReadinessItem({
+    required this.title,
+    required this.detail,
+    required this.ready,
+  });
+
+  final String title;
+  final String detail;
+  final bool ready;
+}
+
+enum _ReadinessLevel {
+  notReady,
+  partial,
+  ready,
 }

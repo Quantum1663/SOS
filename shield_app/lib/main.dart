@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shield_app/features/sos/presentation/sos_home_screen.dart';
+import 'package:shield_app/services/shortcut_service.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await ShortcutService.initialize();
+
   runApp(
     const ProviderScope(
       child: ShieldApp(),

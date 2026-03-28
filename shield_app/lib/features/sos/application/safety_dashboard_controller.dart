@@ -125,6 +125,16 @@ class SafetyDashboardController
   }
 
   Future<void> triggerSilentSos() async {
+    if (!SmsService.supportsSilentSend) {
+      _setState(
+        _current.copyWith(
+          statusMessage:
+              'Silent SOS needs Android SMS access on this build. Use the call actions instead.',
+        ),
+      );
+      return;
+    }
+
     await _triggerEmergency(
       mode: SafetyMode.silent,
       summary: 'Silent SOS sent to trusted contacts.',
@@ -250,13 +260,31 @@ class SafetyDashboardController
           locationText: locationText,
           timestamp: timestamp,
         );
+        final deliveryFailures = <String>[];
+        var deliveredContactCount = 0;
+        var emergencyCallPlaced = false;
+        var emergencyCallFailed = false;
 
         for (final contact in contacts) {
-          await SmsService.sendSOS(number: contact.phone, message: message);
+          try {
+            await SmsService.sendSOS(number: contact.phone, message: message);
+            deliveredContactCount++;
+          } catch (_) {
+            deliveryFailures.add(contact.name);
+          }
         }
 
         if (shouldCallEmergency) {
-          await CallService.callEmergency(_current.settings.primaryEmergencyNumber);
+          try {
+            await CallService.callEmergency(_current.settings.primaryEmergencyNumber);
+            emergencyCallPlaced = true;
+          } catch (_) {
+            emergencyCallFailed = true;
+          }
+        }
+
+        if (deliveredContactCount == 0 && !emergencyCallPlaced) {
+          throw Exception('No emergency actions could be completed.');
         }
 
         await _recordIncident(
@@ -274,11 +302,20 @@ class SafetyDashboardController
             : settings.sendWomenHelplinePrompt
                 ? 'You can also call ${settings.womenHelplineNumber} for support.'
                 : null;
+        final deliverySummary = _buildDeliverySummary(
+          deliveredContactCount: deliveredContactCount,
+          emergencyCallPlaced: emergencyCallPlaced,
+          emergencyCallFailed: emergencyCallFailed,
+          deliveryFailures: deliveryFailures,
+        );
         _setState(
           _current.copyWith(
             activeMode: SafetyMode.idle,
             clearCheckIn: true,
-            statusMessage: prompt == null ? summary : '$summary $prompt',
+            statusMessage: [summary, deliverySummary, prompt]
+                .whereType<String>()
+                .where((value) => value.trim().isNotEmpty)
+                .join(' '),
           ),
         );
       },
@@ -315,6 +352,41 @@ class SafetyDashboardController
         'Time: $localTimestamp\n'
         '$locationText\n'
         'Please call me, track my route, and escalate to 112 if I do not respond.';
+  }
+
+  String? _buildDeliverySummary({
+    required int deliveredContactCount,
+    required bool emergencyCallPlaced,
+    required bool emergencyCallFailed,
+    required List<String> deliveryFailures,
+  }) {
+    final parts = <String>[];
+
+    if (deliveredContactCount > 0) {
+      parts.add(
+        deliveredContactCount == 1
+            ? '1 trusted contact was alerted.'
+            : '$deliveredContactCount trusted contacts were alerted.',
+      );
+    }
+
+    if (emergencyCallPlaced) {
+      parts.add('Emergency call launched.');
+    } else if (emergencyCallFailed) {
+      parts.add('Emergency call could not be launched.');
+    }
+
+    if (deliveryFailures.isNotEmpty) {
+      final failedNames = deliveryFailures.take(2).join(', ');
+      final suffix = deliveryFailures.length > 2 ? ', and others' : '';
+      parts.add('Could not reach $failedNames$suffix.');
+    }
+
+    if (parts.isEmpty) {
+      return null;
+    }
+
+    return parts.join(' ');
   }
 
   Future<void> _recordIncident({
